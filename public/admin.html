@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - Panavelystories</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="admin-body">
+    <div class="admin-sidebar">
+        <h2>Admin Panel</h2>
+        <ul>
+            <li><a href="#" onclick="showSection('attendance')">Live Attendance</a></li>
+            <li><a href="#" onclick="showSection('leaves')">Leave Requests</a></li>
+            <li><a href="#" onclick="showSection('employees')">Manage Employees</a></li>
+        </ul>
+        <div class="sidebar-bottom">
+            <button class="btn btn-primary" onclick="window.location.href='/api/export'">📥 Export to Excel</button>
+            <br>
+            <a href="/" class="admin-link">← Back to Portal</a>
+        </div>
+    </div>
+
+    <div class="admin-content">
+        <!-- Attendance Section -->
+        <section id="sec-attendance" class="admin-section active">
+            <h2>Live Attendance Logs</h2>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Employee Name</th>
+                            <th>Time In</th>
+                            <th>Time Out</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="attendance-tbody">
+                        <!-- rows -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Leaves Section -->
+        <section id="sec-leaves" class="admin-section hidden">
+            <h2>Leave Applications</h2>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Employee</th>
+                            <th>Start Date</th>
+                            <th>End Date</th>
+                            <th>Reason</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="leaves-tbody">
+                        <!-- rows -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Employees Section -->
+        <section id="sec-employees" class="admin-section hidden">
+            <h2>Manage Employees</h2>
+            <div class="add-emp-form">
+                <input type="text" id="new-emp-name" placeholder="New Employee Name" class="premium-input">
+                <button class="btn btn-primary" onclick="addEmployee()">Add Employee</button>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="employees-tbody">
+                        <!-- rows -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+node_modules/
+database.db
+Attendance_Export.csv
+.env
