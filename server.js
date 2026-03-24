@@ -5,6 +5,19 @@ const path = require('path');
 const db = require('./database');
 const { createObjectCsvWriter } = require('csv-writer');
 
+async function sendToGoogleSheets(action, payload) {
+    if (!process.env.GOOGLE_SHEETS_WEBHOOK) return;
+    try {
+        await fetch(process.env.GOOGLE_SHEETS_WEBHOOK, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, ...payload })
+        });
+    } catch (err) {
+        console.error("Google Sheets Sync Error:", err.message);
+    }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -32,7 +45,9 @@ app.post('/api/employees', async (req, res) => {
     const { name } = req.body;
     try {
         const result = await db.query("INSERT INTO employees (name) VALUES ($1) RETURNING id", [name]);
-        res.json({ id: result.rows[0].id, name });
+        const id = result.rows[0].id;
+        sendToGoogleSheets('add_employee', { id, name });
+        res.json({ id, name });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -55,6 +70,7 @@ app.post('/api/attendance/in', async (req, res) => {
     try {
         await db.query("INSERT INTO attendance (employee_id, date, time_in) VALUES ($1, $2, $3)", 
             [employee_id, date, time_in]);
+        sendToGoogleSheets('time_in', { employee_id, date, time_in });
         res.json({ success: true, message: 'Time In marked successfully!' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -74,6 +90,7 @@ app.post('/api/attendance/out', async (req, res) => {
         
         const row = result.rows[0];
         await db.query("UPDATE attendance SET time_out = $1 WHERE id = $2", [time_out, row.id]);
+        sendToGoogleSheets('time_out', { employee_id, date, time_out });
         res.json({ success: true, message: 'Time Out marked successfully!' });
     } catch (err) {
         res.status(500).json({ error: err.message });
