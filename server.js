@@ -1,200 +1,413 @@
 const express = require('express');
+const session = require('express-session');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 const path = require('path');
-const db = require('./database');
-const { createObjectCsvWriter } = require('csv-writer');
-
-async function sendToGoogleSheets(action, payload) {
-    if (!process.env.GOOGLE_SHEETS_WEBHOOK) return;
-    try {
-        await fetch(process.env.GOOGLE_SHEETS_WEBHOOK, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action, ...payload })
-        });
-    } catch (err) {
-        console.error("Google Sheets Sync Error:", err.message);
-    }
-}
+const XLSX = require('xlsx');
+const { initDB, getDB } = require('./database');
+const { initSheets, syncAttendance, syncEmployees, syncLeaves } = require('./sheets');
+const { ObjectId } = require('mongodb');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Middleware
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Serve static frontend files
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'panavelystories-attendance-secret-2026',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 24 * 60 * 60 * 1000 }
+}));
 
-// API Routes
+// Auth middleware
+function requireAuth(req, res, next) {
+  if (req.session && req.session.user) return next();
+  res.status(401).json({ error: 'Unauthorized' });
+}
 
-// 1. Get all employees
-app.get('/api/employees', async (req, res) => {
-    try {
-        const result = await db.query("SELECT * FROM employees");
-        res.json(result.rows);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+function requireAdmin(req, res, next) {
+  if (req.session && req.session.user && req.session.user.role === 'admin') return next();
+  res.status(403).json({ error: 'Admin access required' });
+}
+
+// Helper: trigger Google Sheets sync in background
+async function triggerAttendanceSync() {
+  try {
+    const db = getDB();
+    const records = await db.collection('attendance').aggregate([
+      { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'user' } },
+      { $unwind: '$user' },
+      { $project: { date: 1, check_in: 1, check_out: 1, status: 1, notes: 1, full_name: '$user.full_name', department: '$user.department' } },
+      { $sort: { date: -1 } }
+    ]).toArray();
+    syncAttendance(records);
+  } catch {}
+}
+
+async function triggerEmployeeSync() {
+  try {
+    const db = getDB();
+    const employees = await db.collection('users').find({}, { projection: { password: 0 } }).sort({ full_name: 1 }).toArray();
+    syncEmployees(employees);
+  } catch {}
+}
+
+async function triggerLeaveSync() {
+  try {
+    const db = getDB();
+    const leaves = await db.collection('leaves').aggregate([
+      { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'user' } },
+      { $unwind: '$user' },
+      { $project: { leave_type: 1, start_date: 1, end_date: 1, reason: 1, status: 1, admin_remarks: 1, full_name: '$user.full_name', department: '$user.department' } },
+      { $sort: { created_at: -1 } }
+    ]).toArray();
+    syncLeaves(leaves);
+  } catch {}
+}
+
+// ==================== AUTH ROUTES ====================
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const db = getDB();
+    const user = await db.collection('users').findOne({ username, password, status: 'active' });
+    if (!user) return res.status(401).json({ error: 'Invalid credentials or account inactive' });
+    req.session.user = { id: user._id.toString(), username: user.username, full_name: user.full_name, role: user.role };
+    res.json({ success: true, user: req.session.user });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 2. Add an employee (Admin)
-app.post('/api/employees', async (req, res) => {
-    const { name } = req.body;
-    try {
-        const result = await db.query("INSERT INTO employees (name) VALUES ($1) RETURNING id", [name]);
-        const id = result.rows[0].id;
-        sendToGoogleSheets('add_employee', { id, name });
-        res.json({ id, name });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+app.post('/api/logout', (req, res) => {
+  req.session.destroy();
+  res.json({ success: true });
 });
 
-// 3. Delete an employee (Admin)
-app.delete('/api/employees/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        await db.query("DELETE FROM employees WHERE id = $1", [id]);
-        res.json({ success: true, message: 'Employee deleted!' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+app.get('/api/me', requireAuth, (req, res) => {
+  res.json({ user: req.session.user });
 });
 
-// 4. Mark Time In
-app.post('/api/attendance/in', async (req, res) => {
-    const { employee_id, date, time_in } = req.body;
-    try {
-        await db.query("INSERT INTO attendance (employee_id, date, time_in) VALUES ($1, $2, $3)", 
-            [employee_id, date, time_in]);
-        sendToGoogleSheets('time_in', { employee_id, date, time_in });
-        res.json({ success: true, message: 'Time In marked successfully!' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+// ==================== EMPLOYEE ROUTES ====================
+
+app.get('/api/employees', requireAuth, async (req, res) => {
+  try {
+    const db = getDB();
+    const employees = await db.collection('users').find({}, { projection: { password: 0 } }).sort({ full_name: 1 }).toArray();
+    // Map _id to id for frontend compatibility
+    res.json(employees.map(e => ({ ...e, id: e._id.toString() })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 5. Mark Time Out
-app.post('/api/attendance/out', async (req, res) => {
-    const { employee_id, date, time_out } = req.body;
-    try {
-        // Check if the employee has marked 'In' today
-        const result = await db.query("SELECT id FROM attendance WHERE employee_id = $1 AND date = $2 AND time_out IS NULL ORDER BY id DESC LIMIT 1", [employee_id, date]);
-        
-        if (result.rows.length === 0) {
-            return res.status(400).json({ error: 'No active Time In found for today.' });
-        }
-        
-        const row = result.rows[0];
-        await db.query("UPDATE attendance SET time_out = $1 WHERE id = $2", [time_out, row.id]);
-        sendToGoogleSheets('time_out', { employee_id, date, time_out });
-        res.json({ success: true, message: 'Time Out marked successfully!' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+app.post('/api/employees', requireAdmin, async (req, res) => {
+  try {
+    const { username, password, full_name, email, phone, department, role } = req.body;
+    const db = getDB();
+
+    const existing = await db.collection('users').findOne({ username });
+    if (existing) return res.status(400).json({ error: 'Username already exists' });
+
+    const result = await db.collection('users').insertOne({
+      username,
+      password: password || 'password123',
+      full_name,
+      email: email || '',
+      phone: phone || '',
+      department: department || 'General',
+      role: role || 'employee',
+      status: 'active',
+      created_at: new Date()
+    });
+
+    triggerEmployeeSync();
+    res.json({ success: true, id: result.insertedId.toString() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 6. Apply for Leave
-app.post('/api/leaves', async (req, res) => {
-    const { employee_id, start_date, end_date, reason } = req.body;
-    try {
-        await db.query("INSERT INTO leaves (employee_id, start_date, end_date, reason) VALUES ($1, $2, $3, $4)", 
-            [employee_id, start_date, end_date, reason]);
-        res.json({ success: true, message: 'Leave application submitted!' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+app.put('/api/employees/:id', requireAdmin, async (req, res) => {
+  try {
+    const { full_name, email, phone, department, role, status, password } = req.body;
+    const db = getDB();
+    const update = { full_name, email, phone, department, role, status };
+    if (password) update.password = password;
+
+    await db.collection('users').updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: update }
+    );
+
+    triggerEmployeeSync();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 7. Get all attendance records (Admin)
-app.get('/api/attendance', async (req, res) => {
-    const query = `
-        SELECT a.id, e.name as employee_name, a.date, a.time_in, a.time_out 
-        FROM attendance a
-        JOIN employees e ON a.employee_id = e.id
-        ORDER BY a.date DESC, a.time_in DESC
-    `;
-    try {
-        const result = await db.query(query);
-        res.json(result.rows);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+app.delete('/api/employees/:id', requireAdmin, async (req, res) => {
+  try {
+    const db = getDB();
+    const oid = new ObjectId(req.params.id);
+    await db.collection('attendance').deleteMany({ user_id: oid });
+    await db.collection('leaves').deleteMany({ user_id: oid });
+    await db.collection('users').deleteOne({ _id: oid });
+
+    triggerEmployeeSync();
+    triggerAttendanceSync();
+    triggerLeaveSync();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 8. Delete an attendance record (Admin editable access)
-app.delete('/api/attendance/:id', async (req, res) => {
-    try {
-        await db.query("DELETE FROM attendance WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: 'Record deleted!' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+// ==================== ATTENDANCE ROUTES ====================
+
+app.get('/api/attendance', requireAuth, async (req, res) => {
+  try {
+    const { date, user_id, start_date, end_date } = req.query;
+    const db = getDB();
+    const filter = {};
+
+    if (req.session.user.role !== 'admin') {
+      filter.user_id = new ObjectId(req.session.user.id);
+    } else if (user_id) {
+      filter.user_id = new ObjectId(user_id);
     }
+
+    if (date) {
+      filter.date = date;
+    } else if (start_date && end_date) {
+      filter.date = { $gte: start_date, $lte: end_date };
+    }
+
+    const records = await db.collection('attendance').aggregate([
+      { $match: filter },
+      { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'user' } },
+      { $unwind: '$user' },
+      { $project: {
+        id: { $toString: '$_id' }, date: 1, check_in: 1, check_out: 1, status: 1, notes: 1,
+        full_name: '$user.full_name', department: '$user.department', user_id: { $toString: '$user_id' }
+      }},
+      { $sort: { date: -1, check_in: -1 } }
+    ]).toArray();
+
+    res.json(records);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 9. Get all leaves (Admin)
-app.get('/api/leaves/all', async (req, res) => {
-    const query = `
-        SELECT l.id, e.name as employee_name, l.start_date, l.end_date, l.reason, l.status 
-        FROM leaves l
-        JOIN employees e ON l.employee_id = e.id
-        ORDER BY l.start_date DESC
-    `;
-    try {
-        const result = await db.query(query);
-        res.json(result.rows);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+app.post('/api/attendance/checkin', requireAuth, async (req, res) => {
+  try {
+    const userId = new ObjectId(req.session.user.id);
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const now = new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
+    const db = getDB();
+
+    const existing = await db.collection('attendance').findOne({ user_id: userId, date: today });
+    if (existing) return res.status(400).json({ error: 'Already checked in today' });
+
+    const parts = now.split(':');
+    const hour = parseInt(parts[0]);
+    const min = parseInt(parts[1]);
+    const status = (hour > 9 || (hour === 9 && min > 30)) ? 'late' : 'present';
+
+    await db.collection('attendance').insertOne({
+      user_id: userId, date: today, check_in: now, check_out: null, status, notes: '', created_at: new Date()
+    });
+
+    triggerAttendanceSync();
+    res.json({ success: true, time: now, status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 10. Update Leave Status (Admin)
-app.put('/api/leaves/:id', async (req, res) => {
-    const { status } = req.body;
-    try {
-        await db.query("UPDATE leaves SET status = $1 WHERE id = $2", [status, req.params.id]);
-        res.json({ success: true, message: 'Leave status updated!' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+app.post('/api/attendance/checkout', requireAuth, async (req, res) => {
+  try {
+    const userId = new ObjectId(req.session.user.id);
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const now = new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
+    const db = getDB();
+
+    const existing = await db.collection('attendance').findOne({ user_id: userId, date: today });
+    if (!existing) return res.status(400).json({ error: 'Not checked in today' });
+    if (existing.check_out) return res.status(400).json({ error: 'Already checked out today' });
+
+    await db.collection('attendance').updateOne({ _id: existing._id }, { $set: { check_out: now } });
+
+    triggerAttendanceSync();
+    res.json({ success: true, time: now });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 11. Export to CSV (Admin)
-app.get('/api/export', async (req, res) => {
-    const query = `
-        SELECT e.name as EmployeeName, a.date as Date, a.time_in as TimeIn, a.time_out as TimeOut 
-        FROM attendance a
-        JOIN employees e ON a.employee_id = e.id
-        ORDER BY a.date DESC
-    `;
-    try {
-        const result = await db.query(query);
-        const rows = result.rows;
-        
-        // Note: For Vercel Serverless, writing to /tmp is required as the filesystem is read-only
-        const filePath = path.join('/tmp', 'Attendance_Export.csv');
-        const csvWriter = createObjectCsvWriter({
-            path: filePath,
-            header: [
-                {id: 'EmployeeName', title: 'EMPLOYEE NAME'},
-                {id: 'Date', title: 'DATE'},
-                {id: 'TimeIn', title: 'TIME IN'},
-                {id: 'TimeOut', title: 'TIME OUT'}
-            ]
-        });
-
-        await csvWriter.writeRecords(rows);
-        res.download(filePath, 'Attendance_Export.csv', (err) => {
-            if (err) console.error("Error downloading file:", err);
-        });
-    } catch (err) {
-        res.status(500).json({ error: "Could not write export file." });
-    }
+app.put('/api/attendance/:id', requireAdmin, async (req, res) => {
+  try {
+    const { check_in, check_out, status, notes } = req.body;
+    const db = getDB();
+    await db.collection('attendance').updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { check_in, check_out, status, notes } }
+    );
+    triggerAttendanceSync();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+app.delete('/api/attendance/:id', requireAdmin, async (req, res) => {
+  try {
+    const db = getDB();
+    await db.collection('attendance').deleteOne({ _id: new ObjectId(req.params.id) });
+    triggerAttendanceSync();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== LEAVE ROUTES ====================
+
+app.get('/api/leaves', requireAuth, async (req, res) => {
+  try {
+    const db = getDB();
+    const filter = {};
+    if (req.session.user.role !== 'admin') {
+      filter.user_id = new ObjectId(req.session.user.id);
+    }
+
+    const leaves = await db.collection('leaves').aggregate([
+      { $match: filter },
+      { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'user' } },
+      { $unwind: '$user' },
+      { $project: {
+        id: { $toString: '$_id' }, leave_type: 1, start_date: 1, end_date: 1, reason: 1, status: 1, admin_remarks: 1,
+        full_name: '$user.full_name', department: '$user.department', user_id: { $toString: '$user_id' }, created_at: 1
+      }},
+      { $sort: { created_at: -1 } }
+    ]).toArray();
+
+    res.json(leaves);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/leaves', requireAuth, async (req, res) => {
+  try {
+    const { leave_type, start_date, end_date, reason } = req.body;
+    const db = getDB();
+    await db.collection('leaves').insertOne({
+      user_id: new ObjectId(req.session.user.id),
+      leave_type, start_date, end_date, reason: reason || '',
+      status: 'pending', admin_remarks: '', created_at: new Date()
+    });
+    triggerLeaveSync();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/leaves/:id', requireAdmin, async (req, res) => {
+  try {
+    const { status, admin_remarks } = req.body;
+    const db = getDB();
+    await db.collection('leaves').updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { status, admin_remarks } }
+    );
+    triggerLeaveSync();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== EXPORT ROUTES ====================
+
+app.get('/api/export/excel', requireAdmin, async (req, res) => {
+  try {
+    const { start_date, end_date, user_id } = req.query;
+    const db = getDB();
+    const filter = {};
+
+    if (user_id) filter.user_id = new ObjectId(user_id);
+    if (start_date && end_date) filter.date = { $gte: start_date, $lte: end_date };
+
+    const data = await db.collection('attendance').aggregate([
+      { $match: filter },
+      { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'user' } },
+      { $unwind: '$user' },
+      { $project: {
+        Date: '$date', 'Employee Name': '$user.full_name', Department: '$user.department',
+        'Check In': '$check_in', 'Check Out': '$check_out', Status: '$status', Notes: '$notes'
+      }},
+      { $sort: { Date: -1, 'Employee Name': 1 } }
+    ]).toArray();
+
+    // Remove _id from output
+    const cleanData = data.map(({ _id, ...rest }) => rest);
+
+    const ws = XLSX.utils.json_to_sheet(cleanData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Attendance');
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', 'attachment; filename=attendance_report.xlsx');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== DASHBOARD STATS ====================
+
+app.get('/api/stats', requireAdmin, async (req, res) => {
+  try {
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const db = getDB();
+
+    const totalEmployees = await db.collection('users').countDocuments({ role: 'employee', status: 'active' });
+    const presentToday = await db.collection('attendance').countDocuments({ date: today });
+    const onLeave = await db.collection('leaves').countDocuments({ status: 'approved', start_date: { $lte: today }, end_date: { $gte: today } });
+    const pendingLeaves = await db.collection('leaves').countDocuments({ status: 'pending' });
+    const lateToday = await db.collection('attendance').countDocuments({ date: today, status: 'late' });
+
+    res.json({ totalEmployees, presentToday, onLeave, pendingLeaves, lateToday, absent: totalEmployees - presentToday - onLeave });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Catch-all: serve index.html
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Start server after DB + Sheets init
+async function start() {
+  await initDB();
+  await initSheets();
+  app.listen(PORT, () => {
+    console.log(`\n🚀 Panavelystories Attendance App running at http://localhost:${PORT}\n`);
+    console.log(`   Admin login: admin / admin123\n`);
+  });
+}
+
+start().catch(err => {
+  console.error('Failed to start:', err);
+  process.exit(1);
 });

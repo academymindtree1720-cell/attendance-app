@@ -1,73 +1,84 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panavelystories Attendance</title>
-    <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Panavelystories Attendance</title>
+  <meta name="description" content="Employee attendance tracking system for Panavelystories">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="app-container">
-        <header class="header">
-            <h1>Panavelystories</h1>
-            <p>Employee Portal</p>
-        </header>
+  <div class="toast-container" id="toasts"></div>
 
-        <main class="main-content">
-            <!-- Loading State -->
-            <div id="loading" class="loading">Loading connection to database...</div>
+  <div class="login-container">
+    <div class="login-card">
+      <div class="logo">
+        <h1>📋 Panavelystories</h1>
+        <p>Attendance Management System</p>
+      </div>
 
-            <!-- Main App Area -->
-            <div id="app-content" class="hidden">
-                <!-- Employee Selection -->
-                <div class="card">
-                    <h2>Select Your Name</h2>
-                    <select id="employee-select" class="premium-select">
-                        <option value="" disabled selected>-- Choose Employee --</option>
-                    </select>
-                </div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <input type="text" id="username" placeholder="Enter your username" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" placeholder="Enter your password" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn-primary btn-lg btn-full" id="loginBtn">
+          Sign In
+        </button>
+      </form>
 
-                <!-- Clock Controls -->
-                <div class="card clock-card">
-                    <div class="time-display" id="clock">00:00:00</div>
-                    <div class="date-display" id="date">--</div>
-                    
-                    <div class="action-buttons">
-                        <button id="btn-in" class="btn btn-primary" onclick="markAttendance('in')">Time In</button>
-                        <button id="btn-out" class="btn btn-secondary" onclick="markAttendance('out')">Time Out</button>
-                    </div>
-                    <p id="attendance-status" class="status-msg"></p>
-                </div>
-
-                <!-- Apply For Leave -->
-                <div class="card leave-card">
-                    <h2>Apply for Leave</h2>
-                    <form id="leave-form" onsubmit="applyLeave(event)">
-                        <div class="form-group">
-                            <label>Start Date</label>
-                            <input type="date" id="leave-start" required class="premium-input">
-                        </div>
-                        <div class="form-group">
-                            <label>End Date</label>
-                            <input type="date" id="leave-end" required class="premium-input">
-                        </div>
-                        <div class="form-group">
-                            <label>Reason</label>
-                            <textarea id="leave-reason" rows="3" required class="premium-input" placeholder="Why are you taking leave?"></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-accent">Submit Leave Request</button>
-                        <p id="leave-status" class="status-msg"></p>
-                    </form>
-                </div>
-            </div>
-            
-        </main>
-        <footer class="footer">
-            <a href="/admin.html" class="admin-link">Admin Dashboard</a>
-        </footer>
+      <p style="text-align:center; margin-top:24px; font-size:0.8rem; color:var(--text-muted);">
+        Contact admin for credentials
+      </p>
     </div>
-    
-    <script src="app.js"></script>
+  </div>
+
+  <script>
+    function showToast(msg, type = 'info') {
+      const c = document.getElementById('toasts');
+      const t = document.createElement('div');
+      t.className = `toast toast-${type}`;
+      t.textContent = msg;
+      c.appendChild(t);
+      setTimeout(() => t.remove(), 3000);
+    }
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('loginBtn');
+      btn.textContent = 'Signing in...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Login successful!', 'success');
+          setTimeout(() => {
+            window.location.href = data.user.role === 'admin' ? '/admin.html' : '/employee-dashboard.html';
+          }, 500);
+        } else {
+          showToast(data.error || 'Login failed', 'error');
+          btn.textContent = 'Sign In';
+          btn.disabled = false;
+        }
+      } catch (err) {
+        showToast('Connection error', 'error');
+        btn.textContent = 'Sign In';
+        btn.disabled = false;
+      }
+    });
+  </script>
 </body>
 </html>

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Dashboard - Panavelystories</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="toast-container" id="toasts"></div>
+  <button class="mobile-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')">☰</button>
+
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <h2>📋 Panavelystories</h2>
+        <small>Attendance System</small>
+      </div>
+      <ul class="sidebar-nav">
+        <li><a href="employee-dashboard.html" class="active"><span class="icon">🏠</span> Dashboard</a></li>
+        <li><a href="#history" onclick="scrollToHistory()"><span class="icon">📊</span> My History</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <div class="sidebar-user">
+          <div class="avatar" id="avatarInitial">E</div>
+          <div class="user-info">
+            <div class="name" id="userName">Employee</div>
+            <div class="role" id="userRole">employee</div>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm btn-full" style="margin-top:12px" onclick="logout()">🚪 Logout</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <div class="page-header">
+        <div>
+          <h1 id="greeting">Good Morning!</h1>
+          <p class="subtitle" id="dateLabel"></p>
+        </div>
+      </div>
+
+      <!-- Check In/Out Panel -->
+      <div class="glass-card">
+        <div class="checkin-panel">
+          <div class="time-display" id="clock">00:00:00</div>
+          <div class="date-display" id="fullDate"></div>
+          <div id="statusIndicator" class="status-indicator not-checked">⏳ Not Checked In</div>
+          <br>
+          <button class="checkin-btn check-in" id="checkinBtn" onclick="doCheckin()">
+            CHECK IN
+          </button>
+        </div>
+      </div>
+
+      <!-- Leave Request -->
+      <div class="glass-card">
+        <div class="card-header">
+          <h3>📅 Request Leave</h3>
+        </div>
+        <form id="leaveForm" style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+          <div class="form-group">
+            <label>Leave Type</label>
+            <select id="leaveType">
+              <option value="casual">Casual Leave</option>
+              <option value="sick">Sick Leave</option>
+              <option value="earned">Earned Leave</option>
+              <option value="unpaid">Unpaid Leave</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Reason</label>
+            <input type="text" id="leaveReason" placeholder="Brief reason">
+          </div>
+          <div class="form-group">
+            <label>Start Date</label>
+            <input type="date" id="leaveStart" required>
+          </div>
+          <div class="form-group">
+            <label>End Date</label>
+            <input type="date" id="leaveEnd" required>
+          </div>
+          <div style="grid-column: span 2;">
+            <button type="submit" class="btn btn-primary">Submit Leave Request</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- My Leaves -->
+      <div class="glass-card">
+        <div class="card-header">
+          <h3>My Leave Requests</h3>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Reason</th>
+                <th>Status</th>
+                <th>Remarks</th>
+              </tr>
+            </thead>
+            <tbody id="leavesTable">
+              <tr><td colspan="6"><div class="spinner"></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Attendance History -->
+      <div class="glass-card" id="history">
+        <div class="card-header">
+          <h3>📊 My Attendance History</h3>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Check In</th>
+                <th>Check Out</th>
+                <th>Status</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="historyTable">
+              <tr><td colspan="5"><div class="spinner"></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let currentUser = null;
+    let todayRecord = null;
+
+    function showToast(msg, type = 'info') {
+      const c = document.getElementById('toasts');
+      const t = document.createElement('div');
+      t.className = `toast toast-${type}`;
+      t.textContent = msg;
+      c.appendChild(t);
+      setTimeout(() => t.remove(), 3000);
+    }
+
+    async function logout() {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.href = '/';
+    }
+
+    function scrollToHistory() {
+      document.getElementById('history').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    // Clock
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('clock').textContent = now.toLocaleTimeString('en-IN', { hour12: false });
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Greeting
+    const hour = new Date().getHours();
+    const greet = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
+
+    // Date
+    const now = new Date();
+    document.getElementById('dateLabel').textContent = now.toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    document.getElementById('fullDate').textContent = now.toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+    async function checkAuth() {
+      try {
+        const res = await fetch('/api/me');
+        const data = await res.json();
+        if (!data.user) { window.location.href = '/'; return; }
+        currentUser = data.user;
+        document.getElementById('greeting').textContent = `${greet}, ${data.user.full_name}!`;
+        document.getElementById('userName').textContent = data.user.full_name;
+        document.getElementById('userRole').textContent = data.user.role;
+        document.getElementById('avatarInitial').textContent = data.user.full_name[0].toUpperCase();
+      } catch { window.location.href = '/'; }
+    }
+
+    async function loadTodayStatus() {
+      const today = new Date().toISOString().split('T')[0];
+      try {
+        const res = await fetch(`/api/attendance?date=${today}`);
+        const data = await res.json();
+        todayRecord = data.length ? data[0] : null;
+        updateCheckinUI();
+      } catch {}
+    }
+
+    function updateCheckinUI() {
+      const btn = document.getElementById('checkinBtn');
+      const status = document.getElementById('statusIndicator');
+      if (!todayRecord) {
+        btn.className = 'checkin-btn check-in';
+        btn.textContent = 'CHECK IN';
+        btn.onclick = doCheckin;
+        status.className = 'status-indicator not-checked';
+        status.innerHTML = '⏳ Not Checked In';
+      } else if (!todayRecord.check_out) {
+        btn.className = 'checkin-btn check-out';
+        btn.textContent = 'CHECK OUT';
+        btn.onclick = doCheckout;
+        status.className = 'status-indicator checked-in';
+        status.innerHTML = `✅ Checked in at ${todayRecord.check_in}`;
+      } else {
+        btn.className = 'checkin-btn disabled';
+        btn.textContent = 'DONE';
+        btn.onclick = null;
+        status.className = 'status-indicator checked-out';
+        status.innerHTML = `🏁 ${todayRecord.check_in} → ${todayRecord.check_out}`;
+      }
+    }
+
+    async function doCheckin() {
+      try {
+        const res = await fetch('/api/attendance/checkin', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`Checked in at ${data.time}!`, 'success');
+          loadTodayStatus();
+          loadHistory();
+        } else {
+          showToast(data.error, 'error');
+        }
+      } catch { showToast('Check-in failed', 'error'); }
+    }
+
+    async function doCheckout() {
+      try {
+        const res = await fetch('/api/attendance/checkout', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`Checked out at ${data.time}!`, 'success');
+          loadTodayStatus();
+          loadHistory();
+        } else {
+          showToast(data.error, 'error');
+        }
+      } catch { showToast('Check-out failed', 'error'); }
+    }
+
+    async function loadHistory() {
+      try {
+        const res = await fetch('/api/attendance');
+        const data = await res.json();
+        const tbody = document.getElementById('historyTable');
+        if (!data.length) {
+          tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><div class="icon">📭</div><h3>No history yet</h3><p>Your attendance records will appear here</p></div></td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.map(r => `
+          <tr>
+            <td>${r.date}</td>
+            <td>${r.check_in || '-'}</td>
+            <td>${r.check_out || '-'}</td>
+            <td><span class="badge ${r.status === 'present' ? 'badge-success' : r.status === 'late' ? 'badge-warning' : 'badge-danger'}">${r.status}</span></td>
+            <td>${r.notes || '-'}</td>
+          </tr>
+        `).join('');
+      } catch {}
+    }
+
+    async function loadLeaves() {
+      try {
+        const res = await fetch('/api/leaves');
+        const data = await res.json();
+        const tbody = document.getElementById('leavesTable');
+        if (!data.length) {
+          tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="icon">📅</div><h3>No leave requests</h3></div></td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.map(l => `
+          <tr>
+            <td><span class="badge badge-info">${l.leave_type}</span></td>
+            <td>${l.start_date}</td>
+            <td>${l.end_date}</td>
+            <td>${l.reason || '-'}</td>
+            <td><span class="badge ${l.status === 'approved' ? 'badge-success' : l.status === 'rejected' ? 'badge-danger' : 'badge-warning'}">${l.status}</span></td>
+            <td>${l.admin_remarks || '-'}</td>
+          </tr>
+        `).join('');
+      } catch {}
+    }
+
+    document.getElementById('leaveForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        const res = await fetch('/api/leaves', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leave_type: document.getElementById('leaveType').value,
+            start_date: document.getElementById('leaveStart').value,
+            end_date: document.getElementById('leaveEnd').value,
+            reason: document.getElementById('leaveReason').value
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Leave request submitted!', 'success');
+          document.getElementById('leaveForm').reset();
+          loadLeaves();
+        }
+      } catch { showToast('Failed to submit leave', 'error'); }
+    });
+
+    checkAuth();
+    loadTodayStatus();
+    loadHistory();
+    loadLeaves();
+  </script>
+</body>
+</html>

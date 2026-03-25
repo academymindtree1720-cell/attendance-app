@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Leave Management - Panavelystories</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="toast-container" id="toasts"></div>
+  <button class="mobile-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')">☰</button>
+
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <h2>📋 Panavelystories</h2>
+        <small>Attendance System</small>
+      </div>
+      <ul class="sidebar-nav">
+        <li><a href="admin.html"><span class="icon">🏠</span> Dashboard</a></li>
+        <li><a href="employees.html"><span class="icon">👥</span> Employees</a></li>
+        <li><a href="attendance.html"><span class="icon">📊</span> Attendance</a></li>
+        <li><a href="leaves.html" class="active"><span class="icon">📅</span> Leave Requests</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <div class="sidebar-user">
+          <div class="avatar" id="avatarInitial">A</div>
+          <div class="user-info">
+            <div class="name" id="userName">Admin</div>
+            <div class="role" id="userRole">admin</div>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm btn-full" style="margin-top:12px" onclick="logout()">🚪 Logout</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <div class="page-header">
+        <div>
+          <h1>Leave Management</h1>
+          <p class="subtitle">Review and manage employee leave requests</p>
+        </div>
+      </div>
+
+      <!-- Pending Leaves -->
+      <div class="glass-card">
+        <div class="card-header">
+          <h3>⏳ Pending Requests</h3>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th>Department</th>
+                <th>Type</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Days</th>
+                <th>Reason</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="pendingTable">
+              <tr><td colspan="8"><div class="spinner"></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- All Leaves -->
+      <div class="glass-card">
+        <div class="card-header">
+          <h3>📋 All Leave History</h3>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th>Department</th>
+                <th>Type</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Reason</th>
+                <th>Status</th>
+                <th>Remarks</th>
+              </tr>
+            </thead>
+            <tbody id="allLeavesTable">
+              <tr><td colspan="8"><div class="spinner"></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Remarks Modal -->
+  <div class="modal-overlay" id="remarksModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="actionTitle">Approve Leave</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="leaveId">
+        <input type="hidden" id="leaveAction">
+        <div class="form-group">
+          <label>Admin Remarks (optional)</label>
+          <textarea id="adminRemarks" rows="3" placeholder="Any comments..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitAction()">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function showToast(msg, type = 'info') {
+      const c = document.getElementById('toasts');
+      const t = document.createElement('div');
+      t.className = `toast toast-${type}`;
+      t.textContent = msg;
+      c.appendChild(t);
+      setTimeout(() => t.remove(), 3000);
+    }
+
+    async function logout() {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.href = '/';
+    }
+
+    async function checkAuth() {
+      try {
+        const res = await fetch('/api/me');
+        const data = await res.json();
+        if (!data.user || data.user.role !== 'admin') { window.location.href = '/'; return; }
+        document.getElementById('userName').textContent = data.user.full_name;
+        document.getElementById('avatarInitial').textContent = data.user.full_name[0].toUpperCase();
+      } catch { window.location.href = '/'; }
+    }
+
+    function daysBetween(d1, d2) {
+      const a = new Date(d1), b = new Date(d2);
+      return Math.ceil((b - a) / (1000 * 60 * 60 * 24)) + 1;
+    }
+
+    async function loadLeaves() {
+      try {
+        const res = await fetch('/api/leaves');
+        const data = await res.json();
+
+        // Pending
+        const pending = data.filter(l => l.status === 'pending');
+        const pTbody = document.getElementById('pendingTable');
+        if (!pending.length) {
+          pTbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">✅</div><h3>No pending requests</h3><p>All caught up!</p></div></td></tr>';
+        } else {
+          pTbody.innerHTML = pending.map(l => `
+            <tr>
+              <td><strong>${l.full_name}</strong></td>
+              <td>${l.department}</td>
+              <td><span class="badge badge-info">${l.leave_type}</span></td>
+              <td>${l.start_date}</td>
+              <td>${l.end_date}</td>
+              <td>${daysBetween(l.start_date, l.end_date)}</td>
+              <td>${l.reason || '-'}</td>
+              <td>
+                <div class="actions">
+                  <button class="action-btn approve" onclick="openAction(${l.id}, 'approved')" title="Approve">✅</button>
+                  <button class="action-btn delete" onclick="openAction(${l.id}, 'rejected')" title="Reject">❌</button>
+                </div>
+              </td>
+            </tr>
+          `).join('');
+        }
+
+        // All
+        const processed = data.filter(l => l.status !== 'pending');
+        const aTbody = document.getElementById('allLeavesTable');
+        if (!processed.length) {
+          aTbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">📋</div><h3>No leave history</h3></div></td></tr>';
+        } else {
+          aTbody.innerHTML = processed.map(l => `
+            <tr>
+              <td><strong>${l.full_name}</strong></td>
+              <td>${l.department}</td>
+              <td><span class="badge badge-info">${l.leave_type}</span></td>
+              <td>${l.start_date}</td>
+              <td>${l.end_date}</td>
+              <td>${l.reason || '-'}</td>
+              <td><span class="badge ${l.status === 'approved' ? 'badge-success' : 'badge-danger'}">${l.status}</span></td>
+              <td>${l.admin_remarks || '-'}</td>
+            </tr>
+          `).join('');
+        }
+      } catch { showToast('Failed to load leaves', 'error'); }
+    }
+
+    function openAction(id, action) {
+      document.getElementById('remarksModal').classList.add('active');
+      document.getElementById('leaveId').value = id;
+      document.getElementById('leaveAction').value = action;
+      document.getElementById('actionTitle').textContent = action === 'approved' ? '✅ Approve Leave' : '❌ Reject Leave';
+      document.getElementById('adminRemarks').value = '';
+    }
+
+    function closeModal() {
+      document.getElementById('remarksModal').classList.remove('active');
+    }
+
+    async function submitAction() {
+      const id = document.getElementById('leaveId').value;
+      const status = document.getElementById('leaveAction').value;
+      const remarks = document.getElementById('adminRemarks').value;
+      try {
+        const res = await fetch(`/api/leaves/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status, admin_remarks: remarks })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`Leave ${status}!`, 'success');
+          closeModal();
+          loadLeaves();
+        }
+      } catch { showToast('Action failed', 'error'); }
+    }
+
+    checkAuth();
+    loadLeaves();
+  </script>
+</body>
+</html>

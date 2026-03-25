@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Attendance Records - Panavelystories</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="toast-container" id="toasts"></div>
+  <button class="mobile-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')">☰</button>
+
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <h2>📋 Panavelystories</h2>
+        <small>Attendance System</small>
+      </div>
+      <ul class="sidebar-nav">
+        <li><a href="admin.html"><span class="icon">🏠</span> Dashboard</a></li>
+        <li><a href="employees.html"><span class="icon">👥</span> Employees</a></li>
+        <li><a href="attendance.html" class="active"><span class="icon">📊</span> Attendance</a></li>
+        <li><a href="leaves.html"><span class="icon">📅</span> Leave Requests</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <div class="sidebar-user">
+          <div class="avatar" id="avatarInitial">A</div>
+          <div class="user-info">
+            <div class="name" id="userName">Admin</div>
+            <div class="role" id="userRole">admin</div>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm btn-full" style="margin-top:12px" onclick="logout()">🚪 Logout</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <div class="page-header">
+        <div>
+          <h1>Attendance Records</h1>
+          <p class="subtitle">View, filter, edit, and export attendance data</p>
+        </div>
+        <button class="btn btn-success" onclick="exportExcel()">📥 Export Excel</button>
+      </div>
+
+      <div class="glass-card">
+        <div class="filter-bar">
+          <div class="form-group">
+            <label>Employee</label>
+            <select id="filterEmployee">
+              <option value="">All Employees</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Start Date</label>
+            <input type="date" id="filterStart">
+          </div>
+          <div class="form-group">
+            <label>End Date</label>
+            <input type="date" id="filterEnd">
+          </div>
+          <button class="btn btn-primary" onclick="loadRecords()">🔍 Filter</button>
+          <button class="btn btn-ghost" onclick="clearFilters()">Clear</button>
+        </div>
+      </div>
+
+      <div class="glass-card">
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Employee</th>
+                <th>Department</th>
+                <th>Check In</th>
+                <th>Check Out</th>
+                <th>Status</th>
+                <th>Notes</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="recordsTable">
+              <tr><td colspan="8"><div class="spinner"></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Edit Modal -->
+  <div class="modal-overlay" id="editModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Edit Attendance Record</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="editId">
+        <div class="form-group">
+          <label>Check In Time</label>
+          <input type="time" id="editCheckIn" step="1">
+        </div>
+        <div class="form-group">
+          <label>Check Out Time</label>
+          <input type="time" id="editCheckOut" step="1">
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select id="editStatus">
+            <option value="present">Present</option>
+            <option value="late">Late</option>
+            <option value="half-day">Half Day</option>
+            <option value="absent">Absent</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea id="editNotes" rows="2" placeholder="Optional notes..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveRecord()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function showToast(msg, type = 'info') {
+      const c = document.getElementById('toasts');
+      const t = document.createElement('div');
+      t.className = `toast toast-${type}`;
+      t.textContent = msg;
+      c.appendChild(t);
+      setTimeout(() => t.remove(), 3000);
+    }
+
+    async function logout() {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.href = '/';
+    }
+
+    async function checkAuth() {
+      try {
+        const res = await fetch('/api/me');
+        const data = await res.json();
+        if (!data.user || data.user.role !== 'admin') { window.location.href = '/'; return; }
+        document.getElementById('userName').textContent = data.user.full_name;
+        document.getElementById('avatarInitial').textContent = data.user.full_name[0].toUpperCase();
+      } catch { window.location.href = '/'; }
+    }
+
+    async function loadEmployeeFilter() {
+      const res = await fetch('/api/employees');
+      const emps = await res.json();
+      const sel = document.getElementById('filterEmployee');
+      emps.filter(e => e.role === 'employee').forEach(e => {
+        sel.innerHTML += `<option value="${e.id}">${e.full_name}</option>`;
+      });
+    }
+
+    async function loadRecords() {
+      const userId = document.getElementById('filterEmployee').value;
+      const start = document.getElementById('filterStart').value;
+      const end = document.getElementById('filterEnd').value;
+
+      let url = '/api/attendance?';
+      if (userId) url += `user_id=${userId}&`;
+      if (start && end) url += `start_date=${start}&end_date=${end}&`;
+
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        const tbody = document.getElementById('recordsTable');
+        if (!data.length) {
+          tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">📭</div><h3>No records found</h3><p>Try adjusting your filters</p></div></td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.map(r => `
+          <tr>
+            <td>${r.date}</td>
+            <td><strong>${r.full_name}</strong></td>
+            <td>${r.department}</td>
+            <td>${r.check_in || '-'}</td>
+            <td>${r.check_out || '-'}</td>
+            <td><span class="badge ${r.status === 'present' ? 'badge-success' : r.status === 'late' ? 'badge-warning' : 'badge-danger'}">${r.status}</span></td>
+            <td>${r.notes || '-'}</td>
+            <td>
+              <div class="actions">
+                <button class="action-btn edit" onclick='editRecord(${JSON.stringify(r)})' title="Edit">✏️</button>
+                <button class="action-btn delete" onclick="deleteRecord(${r.id})" title="Delete">🗑️</button>
+              </div>
+            </td>
+          </tr>
+        `).join('');
+      } catch { showToast('Failed to load records', 'error'); }
+    }
+
+    function clearFilters() {
+      document.getElementById('filterEmployee').value = '';
+      document.getElementById('filterStart').value = '';
+      document.getElementById('filterEnd').value = '';
+      loadRecords();
+    }
+
+    function editRecord(r) {
+      document.getElementById('editModal').classList.add('active');
+      document.getElementById('editId').value = r.id;
+      document.getElementById('editCheckIn').value = r.check_in || '';
+      document.getElementById('editCheckOut').value = r.check_out || '';
+      document.getElementById('editStatus').value = r.status;
+      document.getElementById('editNotes').value = r.notes || '';
+    }
+
+    function closeModal() {
+      document.getElementById('editModal').classList.remove('active');
+    }
+
+    async function saveRecord() {
+      const id = document.getElementById('editId').value;
+      try {
+        const res = await fetch(`/api/attendance/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            check_in: document.getElementById('editCheckIn').value,
+            check_out: document.getElementById('editCheckOut').value,
+            status: document.getElementById('editStatus').value,
+            notes: document.getElementById('editNotes').value
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Record updated!', 'success');
+          closeModal();
+          loadRecords();
+        }
+      } catch { showToast('Save failed', 'error'); }
+    }
+
+    async function deleteRecord(id) {
+      if (!confirm('Delete this attendance record?')) return;
+      try {
+        await fetch(`/api/attendance/${id}`, { method: 'DELETE' });
+        showToast('Record deleted', 'success');
+        loadRecords();
+      } catch { showToast('Delete failed', 'error'); }
+    }
+
+    function exportExcel() {
+      const userId = document.getElementById('filterEmployee').value;
+      const start = document.getElementById('filterStart').value;
+      const end = document.getElementById('filterEnd').value;
+      let url = '/api/export/excel?';
+      if (userId) url += `user_id=${userId}&`;
+      if (start && end) url += `start_date=${start}&end_date=${end}&`;
+      window.location.href = url;
+    }
+
+    // Set default dates to current month
+    const now = new Date();
+    const y = now.getFullYear(), m = String(now.getMonth() + 1).padStart(2, '0');
+    document.getElementById('filterStart').value = `${y}-${m}-01`;
+    document.getElementById('filterEnd').value = now.toISOString().split('T')[0];
+
+    checkAuth();
+    loadEmployeeFilter();
+    loadRecords();
+  </script>
+</body>
+</html>
