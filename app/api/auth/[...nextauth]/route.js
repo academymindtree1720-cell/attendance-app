@@ -6,7 +6,7 @@ import NextAuth from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { getEmployees } from "@/lib/sheets";
 
-const authConfig = {
+export const authOptions = {
   // Use JWT sessions (no database needed)
   session: { strategy: "jwt" },
 
@@ -72,7 +72,7 @@ const authConfig = {
   },
 };
 
-const handler = NextAuth(authConfig);
+const handler = NextAuth(authOptions);
 
 export const GET = handler;
 export const POST = handler;

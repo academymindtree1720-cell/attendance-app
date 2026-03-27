@@ -6,12 +6,13 @@
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { saveAttendance, getAttendanceRecords, addEmployee } from "@/lib/sheets";
 
 // ─── POST: Save an attendance event ──────────────────────────────────────────
 export async function POST(request) {
   // Make sure the user is logged in
-  const session = await getServerSession();
+  const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -54,7 +55,7 @@ export async function POST(request) {
 
 // ─── GET: Fetch all attendance records (admin only) ───────────────────────────
 export async function GET() {
-  const session = await getServerSession();
+  const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
