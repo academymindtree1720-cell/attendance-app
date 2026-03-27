@@ -1,7 +1,7 @@
 // app/login/page.jsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
@@ -111,10 +111,10 @@ export default function LoginPage() {
 function ClockDisplay() {
   const [time, setTime] = useState(new Date());
 
-  if (typeof window !== "undefined") {
-    // Simple interval — fine for a clock display
-    setTimeout(() => setTime(new Date()), 1000);
-  }
+  useEffect(() => {
+    const interval = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div style={styles.clockText}>
