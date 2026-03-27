@@ -28,17 +28,20 @@ export const authOptions = {
           // Fetch employee list from Google Sheets
           const employees = await getEmployees();
 
+          // Normalize email/password to avoid accidental spaces/casing issues
+          const loginEmail = credentials.email?.trim().toLowerCase();
+          const loginPassword = credentials.password?.trim();
+
           // Find matching employee by email (case-insensitive)
           const employee = employees.find(
-            (emp) =>
-              emp.email?.toLowerCase() === credentials.email?.toLowerCase()
+            (emp) => emp.email?.trim().toLowerCase() === loginEmail
           );
 
           if (!employee) return null; // email not found
 
           // Simple plain-text password check
           // ⚠️  In production, store hashed passwords and use bcrypt.compare()
-          if (employee.password !== credentials.password) return null;
+          if (employee.password?.trim() !== loginPassword) return null;
 
           // Return the user object — this becomes the JWT payload
           return {
