@@ -26,7 +26,11 @@ export default function LoginPage() {
     setLoading(false);
 
     if (result?.error) {
-      setError("Invalid email or password. Please try again.");
+      setError(
+        result.error === "CredentialsSignin"
+          ? "Invalid email or password. Please try again."
+          : result.error
+      );
     } else {
       // NextAuth doesn't expose role here, so redirect to dashboard
       // dashboard will re-route admins to /admin

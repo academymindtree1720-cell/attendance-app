@@ -25,31 +25,48 @@ export const authOptions = {
       // This runs on every login attempt
       async authorize(credentials) {
         try {
+          if (!credentials?.email || !credentials?.password) {
+            console.warn("Credentials missing in authorize()", credentials);
+            return null;
+          }
+
           // Fetch employee list from Google Sheets
-          const employees = await getEmployees();
+          const employeesRaw = await getEmployees();
+          const employees = employeesRaw
+            .filter((emp) => emp?.email && emp?.password)
+            .map((emp) => ({
+              name: String(emp.name || "").trim(),
+              email: String(emp.email || "").trim(),
+              password: String(emp.password || "").trim(),
+            }));
 
-          // Normalize email/password to avoid accidental spaces/casing issues
-          const loginEmail = credentials.email?.trim().toLowerCase();
-          const loginPassword = credentials.password?.trim();
+          const loginEmail = credentials.email.trim().toLowerCase();
+          const loginPassword = credentials.password.trim();
 
-          // Find matching employee by email (case-insensitive)
           const employee = employees.find(
-            (emp) => emp.email?.trim().toLowerCase() === loginEmail
+            (emp) => emp.email.toLowerCase() === loginEmail
           );
 
-          if (!employee) return null; // email not found
+          if (!employee) {
+            console.warn(`Login failed: email not found (${loginEmail})`);
+            return null;
+          }
 
-          // Simple plain-text password check
-          // ⚠️  In production, store hashed passwords and use bcrypt.compare()
-          if (employee.password?.trim() !== loginPassword) return null;
+          if (employee.password !== loginPassword) {
+            console.warn(`Login failed: password mismatch for ${loginEmail}`);
+            return null;
+          }
 
-          // Return the user object — this becomes the JWT payload
+          const adminEmails = (process.env.ADMIN_EMAILS || "")
+            .split(",")
+            .map((e) => e.trim().toLowerCase())
+            .filter(Boolean);
+
           return {
             id: employee.email,
             name: employee.name,
             email: employee.email,
-            // Mark admins by checking an env variable list of admin emails
-            role: process.env.ADMIN_EMAILS?.split(",").includes(employee.email)
+            role: adminEmails.includes(employee.email.toLowerCase())
               ? "admin"
               : "employee",
           };
